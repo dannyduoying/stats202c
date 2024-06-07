@@ -1,0 +1,219 @@
+---
+title: "STATS 202C Project"
+author: "Bradley Tang (UID 106297711)"
+header-includes:
+- \usepackage{bm}
+- \newcommand{\E}{\mathbb{E}}
+- \newcommand{\Var}{\mathrm{Var}}
+- \newcommand{\cov}{\mathrm{cov}}
+- \newcommand{\Exp}{\mathrm{Exp}}
+- \newcommand{\Pareto}{\mathrm{Pareto}}
+- \newcommand{\Cauchy}{\mathrm{Cauchy}}
+- \newcommand{\Binom}{\mathrm{Binom}}
+- \newcommand{\Unif}{\mathrm{Unif}}
+- \newcommand{\Beta}{\mathrm{Beta}}
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.align = "center",
+                      fig.height = 4,
+                      fig.width = 6)
+```
+
+```{r}
+# Danny's file
+library(readxl)
+library(tidyverse)
+
+## Read
+data <- read_xlsx("data.xlsx", col_names = FALSE) 
+sampling_old <- read_xlsx("initial_sampling_data.xlsx", col_names = FALSE)
+sampling <- sampling_old[sample(1:95,20),]
+colnames(data) <- c("X1", "X2", "Value")
+colnames(sampling) <- c("X1", "X2", "Value")
+
+data <- data %>%
+  mutate(X1 = round(X1, digits = 2),
+         X2 = round(X2, digits = 2))
+#data$Value <- apply(data[,1:2], 1, DiceKriging::branin)
+data$Value <- -(data$Value * 100)
+sampling <- sampling %>%
+  mutate(X1 = round(X1, digits = 2),
+         X2 = round(X2, digits = 2))
+
+sampling <- sampling %>%
+  filter(!is.na(X1)) %>%
+  select(X1, X2) %>%
+  left_join(data, by = c("X1" = "X1", "X2" = "X2")) %>%
+  filter(!is.na(Value))
+
+f_min <- min(sampling$Value)
+
+
+## Estimate parameters
+fitted_model <- DiceKriging::km(formula = ~1,
+                                design = cbind(sampling$X1,sampling$X2), 
+                                response = sampling$Value,
+                                covtype = "exp",
+                                control = list(trace=FALSE))
+
+# negative expected improvement function (we try to minimize)
+Neg_EI = function(x) {
+  y <- predict(fitted_model, matrix(x,nrow = 1), "UK")$mean
+  s <- predict(fitted_model, matrix(x,nrow = 1), "UK")$sd
+
+  z = (f_min-y)/s
+  -(f_min-y)*pnorm(z)-s*dnorm(z)
+}
+
+### Plots
+plot(sampling$X1,sampling$X2)
+plot_data <- data[10*(1:999)+1,]
+plot_data_new <- plot_data[c(rep(100,9),rep(200,9),rep(300,9),rep(400,9),rep(500,9),
+                             rep(600,9),rep(700,9),rep(800,9),rep(900,9))+ rep(1:9,9),] %>%
+  arrange(X2)
+contour(unique(plot_data_new$X1),unique(plot_data_new$X2),
+        matrix(plot_data_new$Value, 9, 9),20)
+
+grid_points = 1e2
+grid = seq(0, 1, length.out=grid_points)
+z = matrix(numeric(grid_points^2), nrow = grid_points)
+for (i in 1:grid_points) {
+  for (j in 1:grid_points) {
+    z[i,j] = Neg_EI(c(grid[i],grid[j]))
+  }
+}
+contour(x=grid,y=grid,z)
+
+h = Neg_EI # comment to test other h
+
+dim = 2
+
+# number of iterations
+M = 1e2
+
+# vector of T_1, T_2, ..., T_M closer to 0
+big_T = 1/(1:M)
+
+# number of iterations for each Metropolis-Hastings (sampling) alogrithm
+N = rep(1e2,M)
+
+# starting point
+x0 = rep(0,dim)
+# best value and point
+best = c(h(x0),x0)
+
+current = x0
+for (k in 1:M) {
+  target = function(x) {
+    exp(-h(x) / big_T[k])
+  }
+  pi_current = target(current)
+  for (i in N[k]) {
+    # proposed point and target function value
+    proposed = rnorm(dim,current,0.5)%%1
+    pi_proposed = target(proposed)
+    
+    u = runif(1)
+    # accept/reject proposed point
+    if (pi_current < Inf & (pi_current == 0 | u <= pi_proposed / pi_current)) {
+      current = proposed
+      pi_current = pi_proposed
+    }
+    # update the best point and value if value is better
+    h_current = h(current)
+    if (h_current < best[1]) {
+      best = c(h_current, current)
+    }
+  }
+}
+best
+
+#optimize(h,interval=c(-10,10)) # if h is 1-dim
+```
+
+### Loop
+
+```{r}
+f_min_tracker <- c(f_min)
+
+for (i in 1:10) {
+  top <- data.frame(X1 = round(best[2],2),
+                  X2 = round(best[3],2))
+  #top$Value <- DiceKriging::branin(top)
+  top <- top %>%
+    left_join(data, by = c("X1" = "X1", "X2" = "X2"))
+  sampling <- rbind(top,sampling)
+  f_min <- min(sampling$Value)
+  f_min_tracker <- c(f_min_tracker,f_min)
+  
+  ## Estimate parameters
+  fitted_model <- DiceKriging::km(formula = ~1,
+                                  design = cbind(sampling$X1,sampling$X2), 
+                                  response = sampling$Value,
+                                  covtype = "exp",
+                                  control = list(trace=FALSE))
+  
+  dim = 2
+  
+  # number of iterations
+  M = 1e2
+  
+  # vector of T_1, T_2, ..., T_M closer to 0
+  big_T = 1/(1:M)
+  
+  # number of iterations for each Metropolis-Hastings (sampling) alogrithm
+  N = rep(1e2,M)
+  
+  # starting point
+  x0 = rep(0,dim)
+  # best value and point
+  best = c(h(x0),x0)
+  
+  current = x0
+  for (k in 1:M) {
+    target = function(x) {
+      exp(-h(x) / big_T[k])
+    }
+    pi_current = target(current)
+    for (i in N[k]) {
+      # proposed point and target function value
+      proposed = rnorm(dim,current,0.5)%%1
+      pi_proposed = target(proposed)
+      
+      u = runif(1)
+      # accept/reject proposed point
+      if (pi_current < Inf & (pi_current == 0 | u <= pi_proposed / pi_current)) {
+        current = proposed
+        pi_current = pi_proposed
+      }
+      # update the best point and value if value is better
+      h_current = h(current)
+      if (h_current < best[1]) {
+        best = c(h_current, current)
+      }
+    }
+  }
+}
+
+top <- data.frame(X1 = round(best[2],2),
+                  X2 = round(best[3],2))
+  #top$Value <- DiceKriging::branin(top)
+  top <- top %>%
+    left_join(data, by = c("X1" = "X1", "X2" = "X2"))
+  sampling <- rbind(top,sampling)
+  f_min <- min(sampling$Value)
+  f_min_tracker <- c(f_min_tracker,f_min)
+```
+
+
+### Plots
+
+```{r}
+plot(1:(length(f_min_tracker)), f_min_tracker, type = "l",
+     xlab = "Iter", ylab = "F Min Value")
+```
