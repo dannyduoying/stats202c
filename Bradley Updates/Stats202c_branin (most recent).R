@@ -25,8 +25,8 @@ Neg_EI = function(x) {
 }
 
 plot(sampling$X1,sampling$X2,col="blue",pch=20)
-abline(v=(1:10)/10)
-abline(h=(1:10)/10)
+abline(v=(1:20)/20)
+abline(h=(1:20)/20)
 
 contour(unique(data$X2),unique(data$X1),
         t(matrix(data$Value,100,100)),25,
