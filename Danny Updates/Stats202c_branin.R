@@ -3,8 +3,10 @@ set.seed(1)
 library(readxl)
 library(tidyverse)
 
-sampling_old <- read_xlsx("initial_sampling_data.xlsx", col_names = FALSE)
-sampling <- sampling_old[sample(1:95,20),]
+#sampling_old <- read_xlsx("initial_sampling_data.xlsx", col_names = FALSE)
+#sampling <- sampling_old[sample(1:95,20),]
+x <- lhs::maximinLHS(20,2)
+sampling <- data.frame(X1 = x[,1], X2 = x[,2], Value = 0)
 colnames(sampling) <- c("X1", "X2", "Value")
 
 sampling$Value <- apply(sampling[,1:2], 1, DiceKriging::branin)
