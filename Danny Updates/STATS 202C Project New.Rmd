@@ -1,0 +1,280 @@
+---
+title: "STATS 202C Project"
+author: "Bradley Tang (UID 106297711)"
+header-includes:
+- \usepackage{bm}
+- \newcommand{\E}{\mathbb{E}}
+- \newcommand{\Var}{\mathrm{Var}}
+- \newcommand{\cov}{\mathrm{cov}}
+- \newcommand{\Exp}{\mathrm{Exp}}
+- \newcommand{\Pareto}{\mathrm{Pareto}}
+- \newcommand{\Cauchy}{\mathrm{Cauchy}}
+- \newcommand{\Binom}{\mathrm{Binom}}
+- \newcommand{\Unif}{\mathrm{Unif}}
+- \newcommand{\Beta}{\mathrm{Beta}}
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.align = "center",
+                      fig.height = 4,
+                      fig.width = 6)
+```
+
+```{r}
+set.seed(0)
+
+library(readxl)
+library(tidyverse)
+
+## Read
+data <- read_xlsx("data.xlsx", col_names = FALSE) 
+sampling_old <- read_xlsx("initial_sampling_data.xlsx", col_names = FALSE)
+sampling <- sampling_old[sample(1:95,20),]
+colnames(data) <- c("X1", "X2", "Value")
+colnames(sampling) <- c("X1", "X2", "Value")
+
+data <- data %>%
+  mutate(X1 = round(X1, digits = 2),
+         X2 = round(X2, digits = 2))
+
+### Set Up 1: Branin
+#data$Value <- apply(data[,1:2], 1, DiceKriging::branin)
+
+
+### Set Up 2: Profit Function
+data$Value <- -(data$Value * 100)
+sampling <- sampling %>%
+  mutate(X1 = round(X1, digits = 2),
+         X2 = round(X2, digits = 2))
+
+sampling[which(sampling[,1]==1),1] = 0.99
+sampling[which(sampling[,2]==1),2] = 0.99
+
+sampling <- sampling %>%
+  filter(!is.na(X1)) %>%
+  select(X1, X2) %>%
+  left_join(data, by = c("X1" = "X1", "X2" = "X2")) %>%
+  filter(!is.na(Value))
+
+f_min <- min(sampling$Value)
+
+## Estimate parameters
+fitted_model <- DiceKriging::km(formula = ~1,
+                                design = cbind(sampling$X1,sampling$X2), 
+                                response = sampling$Value,
+                                covtype = "exp",
+                                control = list(trace=FALSE))
+
+# negative expected improvement function (we try to minimize)
+Neg_EI = function(x) {
+  y <- predict(fitted_model, matrix(x,nrow = 1), "UK")$mean
+  s <- predict(fitted_model, matrix(x,nrow = 1), "UK")$sd
+
+  z = (f_min-y)/s
+  -(f_min-y)*pnorm(z)-s*dnorm(z)
+}
+```
+
+### Plots
+
+```{r}
+### Plots
+plot(sampling$X1,sampling$X2)
+plot_data <- data[10*(1:999)+1,]
+plot_data_new <- plot_data[c(rep(100,9),rep(200,9),rep(300,9),rep(400,9),rep(500,9),
+                             rep(600,9),rep(700,9),rep(800,9),rep(900,9))+ rep(1:9,9),] %>%
+  arrange(X2)
+contour(unique(plot_data_new$X1),unique(plot_data_new$X2),
+        matrix(plot_data_new$Value, 9, 9),20)
+
+plot_data2 <- data[sort(c(10*(1:1000)-9,seq(100,10000,by=100))),]
+plot_data2_new <- plot_data2[c(rep(0,11),rep(110,11),rep(220,11),rep(330,11),rep(440,11),rep(550,11),
+                             rep(660,11),rep(770,11),rep(880,11),rep(990,11),rep(1089,11))+ rep(1:11,11),] %>%
+  arrange(X2)
+contour(unique(plot_data2_new$X1),unique(plot_data2_new$X2),
+        matrix(plot_data2_new$Value, 11, 11),20,xlim=c(0,1),ylim=c(0,1),
+        xlab = "x1", ylab = "x2")
+points(sampling$X1,sampling$X2,col="blue",pch=16)
+```
+
+```{r}
+grid_points = 1e2
+grid = seq(0, 1, length.out=grid_points)
+z = matrix(numeric(grid_points^2), nrow = grid_points)
+for (i in 1:grid_points) {
+  for (j in 1:grid_points) {
+    z[i,j] = Neg_EI(c(grid[i],grid[j]))
+  }
+}
+contour(x=grid,y=grid,z,xlab = "x", ylab = "y")
+points(sampling$X1,sampling$X2,col="blue",pch=16)
+points(0.63,0.8,col="red",pch="1")
+points(0.73,0.83,col="red",pch="2")
+points(0.73,0.75,col="red",pch="3")
+points(0.84,0.66,col="red",pch="4")
+points(0.77,0.38,col="red",pch="5")
+```
+
+### Algorithm
+
+```{r}
+f_min_tracker <- c(f_min)
+
+h = Neg_EI # comment to test other h
+
+dim = 2
+
+# number of iterations
+M = 1e2
+
+# vector of T_1, T_2, ..., T_M closer to 0
+big_T = 1/(1:M)
+
+# number of iterations for each Metropolis-Hastings (sampling) algorithm
+N = rep(1e2,M)
+
+# starting point
+x0 = rep(0,dim)
+# best value and point
+best = c(h(x0),x0)
+
+current = x0
+for (k in 1:M) {
+  target = function(x) {
+    exp(-h(x) / big_T[k])
+  }
+  pi_current = target(current)
+  for (i in N[k]) {
+    # proposed point and target function value
+    proposed = rnorm(dim,current,0.5)%%1
+    pi_proposed = target(proposed)
+    
+    u = runif(1)
+    # accept/reject proposed point
+    if (pi_current < Inf & (pi_current == 0 | u <= pi_proposed / pi_current)) {
+      current = proposed
+      pi_current = pi_proposed
+    }
+    # update the best point and value if value is better
+    h_current = h(current)
+    if (h_current < best[1]) {
+      best = c(h_current, current)
+    }
+  }
+}
+best
+```
+
+```{r}
+contour(x=grid,y=grid,z,xlab = "x1", ylab = "x2",xlim=c(0.6,1),ylim=c(0.6,1))
+points(sampling$X1,sampling$X2,col="blue",pch=16)
+points(best[2],best[3],col="red",pch=16)
+
+#optimize(h,interval=c(-10,10)) # if h is 1-dim
+```
+
+### Loop
+
+```{r}
+f_min_tracker <- c(f_min_tracker,f_min)
+
+for (i in 1:19) {
+  top <- data.frame(X1 = round(best[2],2),
+                  X2 = round(best[3],2))
+  #top$Value <- DiceKriging::branin(top)
+  top <- top %>%
+    left_join(data, by = c("X1" = "X1", "X2" = "X2"))
+  sampling <- rbind(top,sampling)
+  f_min <- min(sampling$Value)
+  f_min_tracker <- c(f_min_tracker, f_min)
+  
+  ## Estimate parameters
+  fitted_model <- DiceKriging::km(formula = ~1,
+                                  design = cbind(sampling$X1,sampling$X2), 
+                                  response = sampling$Value,
+                                  covtype = "exp",
+                                  control = list(trace=FALSE))
+  
+  dim = 2
+  
+  # number of iterations
+  M = 1e2
+  
+  # vector of T_1, T_2, ..., T_M closer to 0
+  big_T = 1/(1:M)
+  
+  # number of iterations for each Metropolis-Hastings (sampling) alogrithm
+  N = rep(1e3,M)
+  
+  # starting point
+  x0 = rep(0,dim)
+  # best value and point
+  best = c(h(x0),x0)
+  
+  current = x0
+  for (k in 1:M) {
+    target = function(x) {
+      exp(-h(x) / big_T[k])
+    }
+    pi_current = target(current)
+    for (i in N[k]) {
+      # proposed point and target function value
+      proposed = rnorm(dim,current,0.5)%%1
+      pi_proposed = target(proposed)
+      
+      u = runif(1)
+      # accept/reject proposed point
+      if (pi_current < Inf & (pi_current == 0 | u <= pi_proposed / pi_current)) {
+        current = proposed
+        pi_current = pi_proposed
+      }
+      # update the best point and value if value is better
+      h_current = h(current)
+      if (h_current < best[1]) {
+        best = c(h_current, current)
+      }
+    }
+  }
+}
+
+top <- data.frame(X1 = round(best[2],2),
+                  X2 = round(best[3],2))
+#top$Value <- DiceKriging::branin(top)
+top <- top %>%
+  left_join(data, by = c("X1" = "X1", "X2" = "X2"))
+sampling <- rbind(top, sampling)
+f_min <- min(sampling$Value)
+f_min_tracker <- c(f_min_tracker,f_min)
+```
+
+
+### Plots
+
+```{r}
+plot1 <- plot(0:19, -f_min_tracker[3:22], type = "l",
+     xlab = "Iterations after Initial Sample", ylab = "Maximum Profit", main = "Maximum Profit at Iteration")
+
+contour(unique(plot_data2_new$X1),unique(plot_data2_new$X2),
+        matrix(plot_data2_new$Value, 11, 11),20,xlim=c(0,1),ylim=c(0,1),
+        xlab = "x1", ylab = "x2")
+points(sampling[21:40,]$X1,sampling[21:40,]$X2,col="blue",pch=16)
+points(sampling[1:20,]$X1,sampling[1:20,]$X2,col="red",pch=16)
+```
+
+```{r}
+#par(pty="s")
+contour(unique(plot_data2_new$X1),unique(plot_data2_new$X2),
+        matrix(plot_data2_new$Value, 11, 11),20,xlim=c(0,1),ylim=c(0,1),
+        xlab = "x1", ylab = "x2")
+points(sampling$X1[1:10],sampling$X2[1:10],col="red",pch=16)
+points(sampling$X1[5:10]-0.02,sampling$X2[5:10],col="red",pch=as.character(5:0))
+points(sampling$X1[4]+0.02,sampling$X2[4]+0.03,col="red",pch="6")
+points(sampling$X1[3]-0.02,sampling$X2[3],col="red",pch="7")
+points(sampling$X1[2]-0.02,sampling$X2[2]-0.03,col="red",pch="8")
+points(sampling$X1[1]-0.02,sampling$X2[1],col="red",pch="9")
+points(sampling$X1[11:30],sampling$X2[11:30],col="blue",pch=16)
+```
