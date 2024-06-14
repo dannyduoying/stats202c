@@ -1,4 +1,4 @@
-set.seed(1)
+set.seed(2)
 
 library(readxl)
 library(tidyverse)
@@ -102,6 +102,7 @@ for (i in 1:40) {
       }
     }
   }
+  print(i)
 }
 
 top <- data.frame(X1 = c(best[2]), 
